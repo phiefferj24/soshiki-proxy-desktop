@@ -1,6 +1,6 @@
 rm -r ./out/win/*
 mkdir -p out/win
-foreach ($target in "aarch64-pc-windows-msvc","x86_64-pc-windows-gnu","i686-pc-windows-gnu") {
+foreach ($target in "aarch64-pc-windows-msvc","x86_64-pc-windows-msvc","i686-pc-windows-msvc") {
     rustup target add $target
     cargo build --release --target $target
     mkdir -p ./out/win/$target
