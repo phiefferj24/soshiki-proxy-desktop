@@ -1,19 +1,29 @@
-use std::net::SocketAddr;
+use std::{net::SocketAddr, env::Args, convert::Infallible};
 use hyper::{Body, Request, Response, service::{service_fn, make_service_fn}, Server, Client, client::HttpConnector, Uri, Method, StatusCode, body::Bytes};
-use std::convert::Infallible;
 use hyper_tls::HttpsConnector;
 
 const REDIRECT_LIMIT: u8 = 5;
 
 #[tokio::main]
 async fn main() {
-    let address = SocketAddr::from(([127, 0, 0, 1], 3000));
+    let mut args: Args = std::env::args();
+    let mut port: u16 = 3000;
+    while let Some(arg) = args.next() {
+        if arg == "-p" || arg == "--port" {
+            if let Some(port2) = args.next() {
+                if let Ok(port2) = port2.parse::<u16>() {
+                    port = port2;
+                }
+            }
+        }
+    }
+    let address = SocketAddr::from(([127, 0, 0, 1], port));
     let make_service = make_service_fn(|_conn| async {
         Ok::<_, Infallible>(service_fn(proxy))
     });
     let server = Server::bind(&address).serve(make_service);
     if let Err(err) = server.await {
-        eprintln!("Soshiki proxy server error: {}", err);
+        eprintln!("Proxy error: {}", err);
     }
 }
 
@@ -44,7 +54,7 @@ async fn proxy(mut req: Request<Body>) -> Result<Response<Body>, Infallible> {
             if let Some((key, value)) = item.split_once("=") {
                 if key == "soshiki_set_header" {
                     let value = decode(value.to_string());
-                    if let Some((hkey, hvalue)) = value.split_once("=") {
+                    if let Some((hkey, hvalue)) = value.split_once(":") {
                         headers.push((hkey.to_string(), hvalue.to_string()));
                     }
                 } else {
@@ -75,7 +85,11 @@ async fn proxy(mut req: Request<Body>) -> Result<Response<Body>, Infallible> {
         for header in response.headers() {
             cors_response = cors_response.header(header.0.as_str(), header.1.to_str().unwrap_or(""));
         }
-        cors_response = cors_response.header("Access-Control-Allow-Origin", "*");
+        cors_response = cors_response
+            .header("Access-Control-Allow-Origin", "*")
+            .header("Access-Control-Allow-Methods", "*")
+            .header("Access-Control-Allow-Headers", "*")
+            .header("Access-Control-Allow-Credentials", "true");
         let body = if let Ok(body) = hyper::body::to_bytes(response.body_mut()).await { Body::from(body) } else { Body::empty() };
         if let Ok(response) = cors_response.body(body) {
             return Ok(response);
@@ -95,7 +109,7 @@ async fn request(client: &Client<HttpsConnector<HttpConnector>>, uri: Uri, metho
     for header in headers.clone() {
         builder = builder.header(header.0, header.1);
     }
-    let body = Body::from(bytes.clone().unwrap_or(Bytes::new()));
+    let body = if let Some(bytes) = bytes.clone() { Body::from(bytes) } else { Body::empty() };
     if let Ok(req) = builder.body(body) {
         if let Ok(response) = client.request(req).await {
             if response.status().is_redirection() {
@@ -109,18 +123,13 @@ async fn request(client: &Client<HttpsConnector<HttpConnector>>, uri: Uri, metho
                         redirect_uri = String::from(redirect_path);
                     }
                     return request(client, redirect_uri.parse().unwrap(), method, headers, bytes, redirects + 1).await;
-                } else {
-                    return None;
                 }
             } else {
                 return Some(response);
             }
-        } else {
-            return None;
         }
-    } else {
-        return None;
     }
+    return None;
 }
 
 // from "urldecode" crate
